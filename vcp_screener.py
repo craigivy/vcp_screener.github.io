@@ -9,11 +9,8 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from datetime import date as dt
-from pandas_datareader import data as pdr
 import time
-import finviz
-from finviz.screener import Screener
-from finvizfinance.quote import finvizfinance
+from finvizfinance.screener.performance import Performance
 import matplotlib.pyplot as plt
 from scipy.signal import argrelextrema
 
@@ -42,7 +39,7 @@ def trend_value(nums:list):
         return 0
     
 # determine whether the ticker fulfills trend template
-def trend_template(df):
+def trend_template(df, df_spx):
     # calculate moving averages
     df['MA_50'] = round(df['Close'].rolling(window=50).mean(),2)
     df['MA_150'] = round(df['Close'].rolling(window=150).mean(),2)
@@ -75,10 +72,9 @@ def trend_template(df):
     # An upward trending RS line tells you the stock is outperforming the general market.
     df['RS'] = df['Close']/df_spx['Close']
     slope_rs = df['RS'].rolling(window = 20).apply(trend_value)
-    df['condition_8'] = slope > 0.0
+    df['condition_8'] = slope_rs > 0.0
     
     df['Pass'] = df[['condition_1','condition_2','condition_3','condition_6','condition_7','condition_8']].all(axis='columns')
-    
     return df
 
 # determine local maxima and minima
@@ -243,12 +239,17 @@ def rs_rating(ticker,rs_list):
 
 
 # Screen stocks from Finviz.com with filters
-filters = ['cap_smallover','sh_avgvol_o100','sh_price_o2','ta_sma200_sb50','ta_sma50_pa']
-stock_list = Screener(filters = filters, table = 'Performance' , order = 'asc')
-ticker_table = pd.DataFrame(stock_list.data)
-ticker_list = ticker_table['Ticker'].to_list()
-# print(ticker_list)
+# https://github.com/lit26/finvizfinance/blob/master/finvizfinance/constants.py
+filter = {'Market Cap.':'+Small (over $300mln)',
+                'Average Volume':'Over 1M', 
+                'Price':'Over $2',
+                '200-Day Simple Moving Average':'SMA200 above SMA50',
+                '50-Day Simple Moving Average':'Price above SMA50'}
 
+fperformance = Performance()
+fperformance.set_filter(filters_dict=filter)
+ticker_table = fperformance.screener_view()
+ticker_list = ticker_table['Ticker'].to_list()
 
 # In[ ]:
 
@@ -256,20 +257,20 @@ ticker_list = ticker_table['Ticker'].to_list()
 # for condition_8, RS rating should be greater than 70
 # The RS Rating tracks a stock's share price performance over the last 52 weeks, 
 # and then compares the result to that of all other stocks.
-performance_table = Screener(table='Performance', order='perf52w')
-rs_table = pd.DataFrame(performance_table.data)
+fperformance = Performance()
+rs_table = fperformance.screener_view(order='Performance (Year)')
 rs_list = rs_table['Ticker'].to_list()
 
 # for condition_9 of trend_template_screener, it has to compare with S&P500 index
-df_spx = yf.download(tickers = '^GSPC', period = '2y')
+# df_spx = yf.download(tickers = '^GSPC', period = '2y')
+spx_tick = yf.Ticker('^GSPC')
+df_spx = spx_tick.history(period="2y", interval='1d')
 
 
 # In[ ]:
 
 
 # ticker.info is not used because processing time is too long
-
-yf.pdr_override()
 
 # Create a dataframe to store results later
 radar = pd.DataFrame({
@@ -285,12 +286,15 @@ fail = 0
 
 for ticker_string in ticker_list:
     try:
-        ticker_history = pdr.get_data_yahoo(tickers = ticker_string, period = '2y') # Get the data of stocks
-        trend_template_screener = trend_template(ticker_history) # Determine whether the stocks is in Stage 2
-        if trend_template_screener['Pass'][-1] == 1:
+        ticker = yf.Ticker(ticker_string)
+        ticker_history = ticker.history(period="2y", interval='1d')
+        trend_template_screener = trend_template(ticker_history, df_spx) # Determine whether the stocks is in Stage 2
+        # print(f'{ticker_string} is processing')  
+        if trend_template_screener.iloc[-1]['Pass'] == 1:
             print(f'{ticker_string} is in Stage 2')  
             vcp_screener = list(vcp(ticker_history)) # Determine whether the stocks is in Stage 2
             rs = rs_rating(ticker_string,rs_list) # Calculate RS rating
+            print(f'{ticker_string} rs {rs}, vcp {vcp_screener[-1]}')  
             if (vcp_screener[-1] == 1) & (rs >= 70):
                 vcp_screener.insert(0,ticker_string)
                 vcp_screener.insert(-1,rs)
@@ -317,8 +321,10 @@ print(f'{len(radar)} stocks pass')
 # In[ ]:
 
 
-for ticker in radar['Ticker']:
-    ticker_history = pdr.get_data_yahoo(tickers = ticker, period = '2y')
+for ticker_string in radar['Ticker']:
+    # ticker_history = pdr.get_data_yahoo(tickers = ticker_string, period = '2y')
+    ticker = yf.Ticker(ticker_string)
+    ticker_history = ticker.history(period="2y", interval='1d')
     [local_high, local_low] = local_high_low(ticker_history)
     contraction = contractions(ticker_history,local_high,local_low)
     num_of_contraction = num_of_contractions(contraction)
@@ -339,7 +345,7 @@ for ticker in radar['Ticker']:
 
 
 # Define the filename for your Excel file
-filename = 'C:/Users/marco/Desktop/Trade Resources/Watchlist/vcp_screener.xlsx'
+filename = 'vcp_screener.xlsx'
 
 # Get today's date
 today = dt.today().strftime("%Y_%m_%d")

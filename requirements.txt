@@ -1,0 +1,8 @@
+finvizfinance
+matplotlib
+numpy
+pandas
+openpyxl
+scipy
+yfinance
+setuptools
